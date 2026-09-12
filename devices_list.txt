@@ -1,0 +1,23 @@
+---Devices List---
+
+RP2350B
+-io, compute, management control
+APS6404L-3SQR-ZR
+-64mbit 4 trace external ram
+W25Q128JVPIQ
+-128mbit 4 trace external flash
+ER-TFT043-9
++nt35510
+ -16bit 480x800 display
++cst3240
+ -capacitive touch panel
+LIS2DW12
+-orientation measurement
+DRV2605
+-haptic feedback
+RV-3028-C7
+-time keeping
+INA226AIDGSR
+-
+SDIO
+RMC20452T
