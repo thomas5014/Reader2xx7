@@ -1,4 +1,14 @@
 /.cache
 /.claude
 /ER-TFT043-9_Datasheet.pdf
-/Reader2xx7.code-workspace/build
+/Reader2xx7.code-workspace
+/build
+/backup_everything.bin
+/backup_everything.uf2
+/reader_filesystem_update.bin
+/reader_filesystem_update.uf2
+/lvgl_tutorials/
+/lvgl_examples/
+/lvgl_vscode_project_basicUI1/
+/mpy_firmwares/
+/recovered_filesystem/
