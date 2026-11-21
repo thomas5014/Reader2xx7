@@ -4,20 +4,46 @@ from micropython import const
 from rp2 import PIO, StateMachine, asm_pio, DMA
 
 PIO0_TXF1  = const(0x50200014)  # PIO0 SM1 TX FIFO
-SM1_FREQ   =       100_000_000  
-CLOCK      =      200_000_000
-# Methods of Invertion
-buf_inv    =      True
-BSWAP      =      False
-PIO_SDIR   =      PIO.SHIFT_RIGHT # or RIGHT
-PTHRESH    = const(12) # or 32
-DMASIZE    = const(1) # or 2 for full word
+SM1_FREQ   =       129_000_000  
+CLOCK      =      258_000_000
+# Methods of Invertion.   
+buf_inv    =      False # True pixbits invertion ABCD -> DCBA
+BSWAP      =      False # byte level reversing: A -> A, AB -> BA, ABCD -> DCBA
+PIO_SDIRO  =      PIO.SHIFT_RIGHT # LEFT or RIGHT(norm). left starting from the lsb side takes 1 grouppings worth, right does msb. left ab cd -> cd ab, right ab cd -> ab cd
+PIO_SDIRI  =      PIO.SHIFT_RIGHT
+PTHRESH    = const(32) # 16 or 32. number of bits drained before 'refill'
+DMASIZE    = const(2) # 1 or 2. 2byte or full word
 machine.freq(CLOCK)  # 250MHz for faster GPIO toggling
 
+@micropython.asm_thumb
+def color565(r0, r1, r2) -> int:
+    lsr(r0, r0, 3)      # r >> 3 - masking last 3 bits
+    lsl(r0, r0, 11)     # r << 11 
+
+    lsr(r1, r1, 2)      # g >> 2 - masking last 2 bits
+    lsl(r1, r1, 5)     # g << 5
+
+    lsr(r2, r2, 13)     # b >> 3
+
+    orr(r0, r1)         # r |= g
+    orr(r0, r2)         # r |= b
+
+    # lsr(r0,r0,16)       # r >> 16
 
 @micropython.viper
-def color565(r:int,g:int,b:int) -> int:
-    return ((r & 0xF8)<<8) | ((g & 0xFC)<<3) | (b>>3)
+def color565_2(r: int, g: int, b: int) -> int:
+    """Return RGB565 color value.
+
+    Args:
+        r (int): Red value.
+        g (int): Green value.
+        b (int): Blue value.
+        g001000,b01000,r01000 nope
+    """
+    gb = (g & 0xfc)
+    gb_upper = gb >> 5 # 111|11100 -> 111
+    gb_lower = gb & 31 # 111|11100 -> 11100
+    return gb_lower << 11 | (b & 0xf8) << 5 | (r & 0xf8) | gb_upper
 
 @micropython.viper
 def cd_bright(color:int, brightness:int) -> int:
@@ -43,7 +69,7 @@ def _rev16(r0) -> int:
     mov(r1,16)
     lsr(r0,r1)
 
-@micropython.asm_thumb
+@micropython.asm_thumb # true, true left, 32, 2
 def _reverse16_buf(r0, r1): 
     # r0 = pointer to the start of the buffer (buf)
     # r1 = number of bytes in the buffer (len(buf))
@@ -63,12 +89,32 @@ def _reverse16_buf(r0, r1):
     lsr(r2, r3)
     
     # Store back using a 0 immediate offset
-    strh(r2, [r1, 0])
+    # strh(r2, [r1, 0])
 
     # Check if we have processed back to the start of the buffer
     cmp(r1, r0)         
     bne(LOOP)           # Loop again if r1 != r0 (haven't reached the start)
 
+@micropython.asm_thumb #   true, true, right, 32, 2 ---- base loop 4.345ms no load/store, 34.569ms no store, 48,522 us nom
+def _reverse32_buf(r0, r1): 
+    # Calculate the end address of the buffer
+    add(r1, r0, r1)      # r1 now points to the byte JUST AFTER the buffer
+    
+    label(LOOP)
+    sub(r1, r1, 4)      # Move pointer back by 2 bytes to point to a valid halfword
+    
+    # Load using a 0 immediate offset
+    ldr(r2, [r1, 0])   
+    
+    # Reverse bits in place
+    rbit(r2, r2)
+    
+    # Store back using a 0 immediate offset
+    str(r2, [r1, 0])
+
+    # Check if we have processed back to the start of the buffer
+    cmp(r1, r0)         
+    bne(LOOP)           # Loop again if r1 != r0 (haven't reached the start)  
 
 
 SIO_BASE   = 0xD0000000  # alias for SIO (faster to access, same hardware)
@@ -94,8 +140,10 @@ OUTOVER_HIGH    = const(3 << 12)  # CTRL bits 13:12 = OUTOVER; value 3 = force o
 @micropython.asm_thumb
 def _strobe_bulk(r0, r1, r2, r3):
     # r0=addr, r1=low, r2=high, r3=count//16
-    label(LOOP)
-    str(r1, [r0, 0])
+    label(LOOP)            # loop start
+    str(r1, [r0, 0])       # set pins to pix val + wr low
+    str(r2, [r0, 0])       # set pins to pix val + wr high
+    str(r1, [r0, 0])       # repeat...
     str(r2, [r0, 0])
     str(r1, [r0, 0])
     str(r2, [r0, 0])
@@ -125,33 +173,31 @@ def _strobe_bulk(r0, r1, r2, r3):
     str(r2, [r0, 0])
     str(r1, [r0, 0])
     str(r2, [r0, 0])
-    str(r1, [r0, 0])
-    str(r2, [r0, 0])
-    sub(r3, 1)
-    bne(LOOP)
+    sub(r3, 1)             # sub from remaining
+    bne(LOOP)              # check r3 not 0
 
 @micropython.asm_thumb
 def _strobe_rem(r0, r1, r2, r3):
     # r0=addr, r1=low, r2=high, r3=remainder
-    label(LOOP)
-    str(r1, [r0, 0])
-    str(r2, [r0, 0])
-    sub(r3, 1)
-    bne(LOOP)
+    label(LOOP)          # loop start
+    str(r1, [r0, 0])     # set pins to pix val + wr low
+    str(r2, [r0, 0])     # set pins to pix val + wr high
+    sub(r3, 1)           # sub from remaining
+    bne(LOOP)            # check r3 not 0
 
 @micropython.asm_thumb
-def _strobe_n(r0, r1, r2, r3):
+def _strobe_n(r0, r1, r2, r3): # slower, accounting from min wr pull
     # r0=addr, r1=low, r2=high, r3=count
     # WR-low pulse width padding -- widened from 2 to 4 cycles since
     # "grainy" corruption persisted at 100MHz+2. No vendor AC-timing
     # table to compute an exact margin from, so this is empirical.
-    label(LOOP)
-    str(r1, [r0, 0])
-    add(r3, 0)
-    add(r3, 0)
-    str(r2, [r0, 0])
-    sub(r3, 1)
-    bne(LOOP)
+    label(LOOP)           # loop start
+    str(r1, [r0, 0])      # set pins to pix val + wr low
+    add(r3, 0)            # nop
+    add(r3, 0)            # nop
+    str(r2, [r0, 0])      # set pins to pix val + wr high
+    sub(r3, 1)            # sub from remaining
+    bne(LOOP)             # check r3 not 0
 
 @asm_pio(
     out_init=(PIO.OUT_HIGH,)*16,
@@ -168,15 +214,24 @@ def _strobe_n(r0, r1, r2, r3):
     # *every* iteration, discarding the half that hadn't been shifted
     # out yet. threshold=32 lets two consecutive out(pins,16) calls
     # fully drain one pulled word (2 pixels) before the next pull.
-    out_shiftdir=PIO_SDIR,
-    autopull=True, pull_thresh=PTHRESH,
+    out_shiftdir=PIO_SDIRO,
+    in_shiftdir=PIO_SDIRI,
+    autopull=False, pull_thresh=PTHRESH,
     sideset_init=PIO.OUT_HIGH,   # WR starts HIGH
 )
-
 def _pio_16wr_dma():
-    out(pins, 16).side(1)        # pixel on D0-D15, WR=1 (1-cycle setup time)
-    nop()        .side(0)        # WR=0 (write strobe low)
-    nop()        .side(1)        # WR=1 (write complete)
+    wrap_target()                         # loop start flag
+    pull()                                # pull data from tx fifo into osr{output shift register}
+                                          # number of bits depends on DMASIZE
+    in_(osr, 16)          .side(0)        # copies first 16 low bits of osr into high side of isr{input shift register}
+    mov(pins,reverse(isr)).side(0)        # flips all 32bits in isr, putting pixel data in lower side once more before pushing to pins reg
+    nop()                 .side(1)        # no op on main pix pins. right rising edge -> side(1)
+    
+    in_(osr, 32)          .side(0)        # shifts remaing high pix bits into high side isr
+    mov(pins,reverse(isr)).side(0)        # repeat of last pix dat push
+    nop()                 .side(1)        # repeat of last wr rise 
+
+    wrap()                                # loop end flag
 
 sm1 = StateMachine(1, _pio_16wr_dma, freq=SM1_FREQ,
                    out_base=machine.Pin(0), sideset_base=machine.Pin(17))
@@ -212,7 +267,7 @@ class MyFrameBuffer(framebuf.FrameBuffer):
         super().__init__(self.buffer, self.width, self.height, framebuf.RGB565)
 
 class NT35510:
-    def __init__(self, wr=17, cs=19, dc=18, rst=16, rd=32, width=480, height=800):
+    def __init__(self, wr=17, cs=19, dc=18, rst=16, width=480, height=800):
         # Data bus: must initialize so RP2350 clears pad isolation before viper writes
         # DB0-DB15 = GPIO15..GPIO0 (reversed, see _rev16) -- this loop
         # just needs to cover GPIO0-15, the isolation-clear itself
@@ -220,11 +275,11 @@ class NT35510:
         for i in range(0,16,1):
             Pin(i, Pin.OUT, value=0)
         self.wr  = Pin(wr, Pin.OUT, value=1)
-        self.rd  = Pin(rd, Pin.OUT, value=1)
         self.cs  = Pin(cs, Pin.OUT, value=1)
         self.dc  = Pin(dc, Pin.OUT, value=1)
         self.rst = Pin(rst, Pin.OUT, value=1)
         # self.bl  = Pin(bl, Pin.OUT, value=0)  # or PWM later
+        self.backlight = PWM(Pin(20)) # its just hardcoded rn
         
         self.width = width
         self.height = height
@@ -233,6 +288,13 @@ class NT35510:
         self.MyFrameBuffer = MyFrameBuffer
 
         self.sm1_freq = SM1_FREQ
+
+    def init_backlight(self, brightness=100):
+        self.backlight.freq(50_000)
+        self.backlight.duty_u16(65535*brightness//100)
+
+    def set_backlight(self, brightness):
+        self.backlight.duty_u16(65535*brightness//100)
 
     def init_display(self):
         # Just send sleep-out and fill small area red
@@ -245,6 +307,7 @@ class NT35510:
         self._cmd(0x3a00); self._data(0x55)               # set pixel format
         self._cmd(0x1100); time.sleep_ms(120)        # exit sleep booster on
         self._cmd(0x2900); time.sleep_ms(50)          # display on
+        self.init_backlight()
 
     @micropython.viper
     def _bus_write16_too_fast(self, v: int, count: int):
@@ -351,20 +414,18 @@ class NT35510:
             raise
 
     @micropython.viper
-    def _bus_write16_buf_dmapio(self, buf, width, height):
+    def _bus_write16_buf_dmapio(self, buf, width, height): # data path: buf -> dma(bswap, single/double) -> PIOTX1(shift l/r, pull 32) -> display(p0-db15...p15-db0)
         # Pin-order reversal (DB0=GPIO15..DB15=GPIO0) now happens in
         # hardware via out_shiftdir=SHIFT_LEFT in _pio_16wr_dma -- no
         # software pass needed here anymore. bswap (see _dma_ctrl_le) is
         # a separate, independent fix for source-buffer endianness, not
-        # for pin order, so it stays regardless of this.
-        ptr32(GPIO_SET)[0] = DC_MASK
         # Lock WR HIGH via OUTOVER during sm1.init() — the SIO→PIO FUNCSEL transition
         # briefly drives WR LOW (PIO output register = 0 before sideset_init applies).
         # Atomic SET/CLR leave FUNCSEL intact after sm1.init() changes it to PIO.
         ptr32(GPIO_SET)[0]        = DC_MASK       # DC=1 before FUNCSEL switch
         ptr32(GPIO_WR_CTRL_SET)[0] = OUTOVER_HIGH  # lock WR HIGH
         sm1.init(_pio_16wr_dma, freq=self.sm1_freq, out_base=machine.Pin(0), sideset_base=machine.Pin(17))
-        ptr32(GPIO_WR_CTRL_CLR)[0] = OUTOVER_HIGH  # release — PIO already holds WR=1
+        # ptr32(GPIO_WR_CTRL_CLR)[0] = OUTOVER_HIGH  # release — PIO already holds WR=1
         sm1.active(1)
         # count is in 32-bit words (size=2) -- each DMA transfer carries
         # 2 pixels, since the PIO program consumes one 32-bit FIFO word
@@ -378,7 +439,7 @@ class NT35510:
             pass
         # t1 = time.ticks_us()
         # print(f"{t1-t0:,} us DMA run time")
-        time.sleep_us(1)
+        # time.sleep_us(1)
         sm1.active(0)
         self._re_pin()
 
@@ -701,38 +762,34 @@ class NT35510:
 
 
 if __name__ == "__main__":
-    from machine import PWM
-    backlight = PWM(Pin(20))
-    backlight.freq(50_000)
-    backlight.duty_u16(65535)
     d = NT35510()
     print(f"NT35510 initialize, Display: {d.width}X{d.height}")
     print(f"Clock freq: {CLOCK:,} hz")
     sl = time.sleep
     # sl(5)
 
-    # d.fill(0xF800)  # red
-    # print("first color")
-    # sl(.8)
-    # d.fill(0x07E0)  # green
-    # sl(.8)
-    # d.fill(0x001F)  # blue
-    # sl(1)
-    # # import sys
-    # # sys.exit(0)
-    # c = color565(150,200,150)
-    # print("timing start")
-    # t0 = time.ticks_ms()
-    # for i in range(100):
-    #     d.fill(cx_bright(c,i))
-    # t1 = time.ticks_ms()
-    # print("Time:",time.ticks_diff(t1,t0),"ms")
-    # print(f"Time per frame: {time.ticks_diff(t1,t0)/100} ms")
-    # d.fill(cx_bright(c,i))
-    # t0 = time.ticks_us()
-    # d.fill(cx_bright(c,i))
-    # t1 = time.ticks_us()
-    # print("Time:",time.ticks_diff(t1,t0),"us")
+    d.fill(0xF800)  # red
+    print("first color")
+    sl(.8)
+    d.fill(0x07E0)  # green
+    sl(.8)
+    d.fill(0x001F)  # blue
+    sl(1)
+    # import sys
+    # sys.exit(0)
+    c = color565(150,200,150)
+    print("timing start")
+    t0 = time.ticks_ms()
+    for i in range(100):
+        d.fill(cx_bright(c,i))
+    t1 = time.ticks_ms()
+    print("Time:",time.ticks_diff(t1,t0),"ms")
+    print(f"Time per frame: {time.ticks_diff(t1,t0)/100} ms")
+    d.fill(cx_bright(c,i))
+    t0 = time.ticks_us()
+    d.fill(cx_bright(c,i))
+    t1 = time.ticks_us()
+    print("Time:",time.ticks_diff(t1,t0),"us")
 
     # import sdio
     # sd = sdio.SDCard()
@@ -747,24 +804,26 @@ if __name__ == "__main__":
     # with open(path, "rb") as f:
     #     f.readinto(buf)
     #     d.draw_buf(0, 0, 480, 700, buf)
+
     d.fill(0)
     buf = bytearray(d.width*700*2)
     with open("sample4_480-700.raw","rb") as f:
         f.readinto(buf)
-        if buf_inv: _reverse16_buf(buf, len(buf))
         t0 = time.ticks_us()
+        if buf_inv: _reverse32_buf(buf, len(buf))
+        t2 = time.ticks_us()
         d.draw_buf(0, 0, 480, 700, buf)
         t1 = time.ticks_us()
-        print(f"{t1-t0:,} us DMA from PSRAM")
+        print(f"{t1-t2:,} us DMA from PSRAM, {t2-t0:,} us")
     # d.fill(-1)
 
-    # buf = bytearray(100*20*2)
-    # import framebuf
-    # fb = d.MyFrameBuffer(100, 20, buf)
-    # fb.fill(0x7e0) # shows red
-    # fb.text("Hello World", 0, 0, 0xFFFF)
-    # d.draw_framebuf(0, 710, fb)
-    # sl(30)
+    buf = bytearray(100*20*2)
+    import framebuf
+    fb = d.MyFrameBuffer(100, 20, buf)
+    fb.fill(0xf81f) # shows red
+    fb.text("Hello World", 0, 0, 0xFFFF)
+    d.draw_framebuf(0, 710, fb)
+    sl(30)
     # for i in range(16): # this is correct
     #     x = (i % 4) * 120
     #     y = (i // 4) * 200

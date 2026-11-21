@@ -42,52 +42,69 @@ class INA226:
         # Convert to float Millivolts (2.5 uV = 0.0025 mV)
         return raw_vshunt * 0.0025
 
-
-# --- APPLICATION CODE EXECUTING ON THE RP2350B ---
-
-# 1. Initialize I2C pins (Change pin numbers to your actual physical setup)
-# Ensure your RP2350B image supports the selected pins!
-i2c_bus = machine.SoftI2C(sda=28, scl=29, freq=400_000)
-print(i2c_bus.scan())
-
-# 1.5 Initialize adc pins
-vsys = machine.ADC(machine.Pin(45))  # Voltage input for 3.3V rail
-vbat = machine.ADC(machine.Pin(46))
-
-# 2. Instantiate the driver
-sensor = INA226(i2c_bus, address=0x40)
-print("INA226 communication initialized successfully.\n")
-
-# 2.5 test backlight power
-backlight = machine.PWM(machine.Pin(20))
-backlight.freq(50_000)
-backlight.duty_u16(30_000)
-
-# 2.9 varible for averaging
-av = 0
-times = 0
-
-# 3. Continuous data polling loop
-while True:
-    try:
-        bus_voltage = sensor.read_bus_voltage()
-        shunt_voltage = sensor.read_shunt_voltage()
-        raw_v3 = vsys.read_u16()
-        
-        print(f"Bus Voltage:   {bus_voltage:.3f} V,  {(raw_v3 / 65355) * 3.3 * 3}v")
-        print(f"Shunt Voltage: {shunt_voltage:.4f} mV")
-        print(f"Shunt current: {shunt_voltage / 0.04:.4f} mA")
-        print(f"System power: {shunt_voltage**2 / 0.04:,.2f} mW")
-        print(f"Current based runtime : {10800/(shunt_voltage**2 / 0.04):.2f} H")
-        print("-" * 30)
-        av += shunt_voltage**2 / 40
-        times += 1
-        time.sleep(1)
-        
-    except KeyboardInterrupt:
-        print("\nPolling stopped.")
-        print(f"Average power: {av*1000/times:.4f}mw")
-        break
+    def read_register(self,reg):
+        # IDK look at the data sheet for the valid values
+        data = self._read_register_16(reg)
+        return data
 
 
-#Average power: 412.5028mw at 46% brightness
+if __name__ == "__main__":
+    # --- APPLICATION CODE EXECUTING ON THE RP2350B ---
+
+    # 1. Initialize I2C pins (Change pin numbers to your actual physical setup)
+    # Ensure your RP2350B image supports the selected pins!
+    i2c_bus = machine.I2C(0, sda=28, scl=29, freq=400_000)
+    print(i2c_bus.scan())
+
+    # 1.5 Initialize adc pins
+    vsys = machine.ADC(machine.Pin(45))  # Voltage input for 3.3V rail
+    vbat = machine.ADC(machine.Pin(46))
+
+    # 2. Instantiate the driver
+    sensor = INA226(i2c_bus, address=0x40)
+    print("INA226 communication initialized successfully.\n")
+
+    # 2.5 test backlight power
+    backlight = machine.PWM(machine.Pin(20))
+    backlight.freq(50_000)
+    backlight.duty_u16(30_000)
+
+    # 2.9 varible for averaging
+    av = 0
+    times = 0
+
+    # 3. Continuous data polling loop
+    while True:
+        try:
+            bus_voltage = sensor.read_bus_voltage()
+            shunt_voltage = sensor.read_shunt_voltage()
+            raw_v3 = vsys.read_u16()
+            
+            shunt_current_ma = shunt_voltage / 0.04
+            system_power_mw = bus_voltage * shunt_current_ma  # V_bus * I, not V_shunt^2/R
+                                                                # (which is power dissipated
+                                                                # in the shunt itself, not
+                                                                # system draw)
+            print(f"Bus Voltage:   {bus_voltage:.3f} V,  {(raw_v3 / 65535) * 3.3 * 3}v")
+            print(f"Shunt Voltage: {shunt_voltage:.4f} mV")
+            print(f"Shunt current: {shunt_current_ma:.4f} mA")
+            print(f"System power: {system_power_mw:,.2f} mW")
+            print(f"Current based runtime : {10800/system_power_mw:.2f} H")
+            print(f"More data: {sensor.read_register(4)}")
+            print("-" * 30)
+            av += system_power_mw
+            times += 1
+            time.sleep(1)
+            
+        except KeyboardInterrupt:
+            print("\nPolling stopped.")
+            # av accumulates system_power_mw directly now (see fix above), so
+            # no more *1000 here -- the old accumulator was in watts
+            # (shunt_voltage**2/40, i.e. the wrong V^2/R formula scaled down
+            # by an extra 1000x) specifically so this line could convert back
+            # to mW; now that av is already mW, that conversion isn't needed.
+            print(f"Average power: {av/times:.4f}mw")
+            break
+
+
+    #Average power: 412.5028mw at 46% brightness

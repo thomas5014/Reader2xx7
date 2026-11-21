@@ -1,6 +1,6 @@
 import time
 from machine import I2C, Pin, PWM
-from nt35510 import NT35510
+from nt35510 import NT35510, _reverse32_buf
 from cst3240 import CST3240
 
 # 1. Define I2C & Control Pins (Modify these to match your board schematic)
@@ -27,15 +27,49 @@ irq.irq(trigger=Pin.IRQ_FALLING, handler=touch_isr)
 touch = CST3240(i2c, rst_pin=rst, irq_pin=irq)
 
 
+@micropython.viper
+def switch_bytes(buf: object):
+    p = ptr8(buf)
+    n = int(len(buf)) & ~1
+    tmp: int = 0
+    i: int = 0
+    while i < n:
+        tmp = p[i]
+        p[i] = p[i + 1]
+        p[i + 1] = tmp
+        i += 2
+
+    return buf
+
 backlight = PWM(Pin(20))
 backlight.freq(50_000)
-backlight.duty_u16(10_000)
+backlight.duty_u16(40_000)
 d = NT35510()
-d.fill(-1)
+# d.fill(-1)
+d.fill(0)
+buf = bytearray(d.width*700*2)
+with open("sample4_480-700.raw","rb") as f:
+    f.readinto(buf)
+    t0 = time.ticks_us()
+    # _reverse32_buf(buf, len(buf))
+    t2 = time.ticks_us()
+    d.draw_buf(0, 0, 480, 700, switch_bytes(buf))
+    t1 = time.ticks_us()
+    print(f"{t1-t2:,} us DMA from PSRAM, {t2-t0:,} us")
+# d.fill(-1)
+
+buf = bytearray(100*20*2)
+import framebuf
+fb = d.MyFrameBuffer(100, 20, buf)
+fb.fill(0xf81f) # shows red
+fb.text("Hello World", 0, 0, 0xFFFF)
+d.draw_framebuf(0, 710, fb)
+
 
 prev = None
 values = {}
 last = 0
+# mb = MyFrameBuffer(480,800)
 try:
     while True:
         points = None
@@ -58,7 +92,7 @@ try:
 
             if prev and time.ticks_diff(time.ticks_ms(), prev[2]) < 100:
                 # print(y, prev[1], time.ticks_diff(time.ticks_ms(), prev[2]))
-                print(x,y)
+                # print(x,y)
                 d.line(prev[0], prev[1], x, y, 0x00e0)
             prev = (x,y,time.ticks_ms())
 
@@ -68,7 +102,7 @@ try:
             # else:
             #     values[y][1] += 1
 
-        time.sleep_ms(1)  # Polling interval matching ~20Hz updates
+        time.sleep_ms(0)  # Polling interval matching ~20Hz updates
 finally:
     print(f"Remaining values: {len(values)/8:.2f}%\n{values}")
 

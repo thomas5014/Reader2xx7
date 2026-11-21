@@ -20,8 +20,8 @@ import machine
 import time
 print(machine.freq(50_000_000))
 
-WR_PIN, CS_PIN, DC_PIN, RST_PIN, RD_PIN = 17, 19, 18, 16, 32
-DATA_PINS = list(range(0, 16))  # D0=GPIO4 .. D15=GPIO19
+WR_PIN, CS_PIN, DC_PIN, RST_PIN, RD_PIN = 2, 0, 1, 3, 32
+DATA_PINS = list(range(4, 20))  # D0=GPIO4 .. D15=GPIO19
 
 STEP_MS = 20  # per phase -- trivially capturable on any scope/LA
 
@@ -33,7 +33,7 @@ rst = machine.Pin(RST_PIN, machine.Pin.OUT, value=1)
 # high) even before this Pin object takes over -- GPIO32 just lets us
 # actively pulse it low for a read cycle.
 rd = machine.Pin(RD_PIN, machine.Pin.OUT, value=1)
-data = [machine.Pin(15-i, machine.Pin.OUT, value=0) for i in DATA_PINS]
+data = [machine.Pin(p, machine.Pin.OUT, value=0) for p in DATA_PINS]
 
 
 def _set_bus(value):
@@ -290,6 +290,6 @@ def run():
 
 
 if __name__ == "__main__":
-    run_visible_rect_test()
+    # run_visible_rect_test()
     # run()
-    # run_read_test()
+    run_read_test()

@@ -13,7 +13,7 @@ while True:
     voltage_3v = (raw_v3 / 65355) * 3.3 * 3
     voltage_5v = (raw_v5 / 65355) * 3.3 * 3
 
-    print(f"batV Rail Voltage: {voltage_3v:.2f} V")
-    print(f"sysV Rail Voltage: {voltage_5v:.2f} V")
+    print(f"batV Rail Voltage: {voltage_3v:.3f} V")
+    print(f"sysV Rail Voltage: {voltage_5v:.3f} V\n")
 
-    time.sleep(1)  # Delay for readability
+    time.sleep(.01)  # Delay for readability

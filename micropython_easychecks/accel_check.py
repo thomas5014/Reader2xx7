@@ -143,19 +143,32 @@ class LIS2DW12():
                 self._power = self.getreg(LIS2DW12_CTRL1) & 0xF0
                 self.r_w_reg(LIS2DW12_CTRL1, 0, 0x0F)
 
-# Basic LIS2DW12 MicroPython I2C example
-from machine import I2C, Pin
-import time
+if __name__ == "__main__":
+    # Basic LIS2DW12 MicroPython I2C example
+    from machine import I2C, Pin
+    import time
 
-# Initialize I2C (adjust pins according to your board, e.g., Raspberry Pi Pico)
-i2c = I2C(1, scl=Pin(31), sda=Pin(30), freq=400000)
+    # Initialize I2C (adjust pins according to your board, e.g., Raspberry Pi Pico)
+    i2c = I2C(1, scl=Pin(31), sda=Pin(30), freq=400000)
 
-# Create sensor object (default I2C address is usually 0x19 or 0x18)
-sensor = LIS2DW12(i2c, addr=0x18)
+    # Create sensor object (default I2C address is usually 0x19 or 0x18)
+    sensor = LIS2DW12(i2c, addr=0x18)
 
-while True:
-    # Read acceleration values along X, Y, Z axes
-    x, y, z = sensor.get()  # returns values in mg or g depending on driver implementation
-    print(f"\nX: {x: 5} mg, Y: {y: 5} mg, Z: {z: 5} mg")
-    print(f"Temperature: {sensor.temperature():04} °C")
-    time.sleep(0.1)
+    while False:
+        # Read acceleration values along X, Y, Z axes
+        x, y, z = sensor.get()  # returns values in mg or g depending on driver implementation
+        print(f"\nX: {x: 5} mg, Y: {y: 5} mg, Z: {z: 5} mg")
+        print(f"Temperature: {sensor.temperature():04} °C")
+        time.sleep(0.1)
+
+    import math
+    while True:
+        # print angle and 'strength'
+        x, y, z = sensor.get()
+        angle = (math.sin(y/math.sqrt(x**2+y**2)) * 180//math.tau)
+        strength = (1 - z/1024) * 100
+        print("-"*20,"\nAngle",angle,"\nStrength",strength)
+
+        
+        print(f"\nX: {x: 5} mg, Y: {y: 5} mg, Z: {z: 5} mg")
+        

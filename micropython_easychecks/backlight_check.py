@@ -37,14 +37,14 @@ class TPS61165:
 # --- APPLICATION SETUP FOR THE RP2350B ---
 
 # 1. Choose any available GPIO pin tied to the CTRL line (e.g., GPIO 15)
-LED_CTRL_PIN = 20
+LED_CTRL_PIN = 35 #20
 backlight = TPS61165(pin_num=LED_CTRL_PIN, freq=50_000)
 
 print("TPS61165 Backlight Controller initialized via PWM.")
 
 # 2. Test breathing loop (fades backlight up and down)
 try:
-    backlight.set_brightness(10)
+    backlight.set_brightness(100)
     while True:
         # print("Fading up...")
         # for duty in range(0, 101, 5):  # 0% to 100%

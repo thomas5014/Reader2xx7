@@ -60,7 +60,7 @@ while True:
         checksum = r[6]
         print("Touch info: ID =", id, ", State =", state, ", X =", x, ", Y =", y, ", Area =", area, ", Finger# =", pointnum, ", Checksum =", checksum)
         touched = False
-    sleep(.1)
+    sleep(.01)
 
 
 """Touch info: ID = 0 , State = 6 , X = 368 , Y = 747 , Area = 181 , Finger# = 1 , Checksum = 171

@@ -100,23 +100,24 @@ class RV3028:
             "year":    self._bcd_to_dec(raw[6]) + 2000
         }
 
+if __name__ == "__main__":
+    # --- EXECUTION ON THE RP2350B ---
 
-# --- EXECUTION ON THE RP2350B ---
+    # 1. Init your software I2C pipeline
+    i2c_bus = machine.I2C(0, sda=28, scl=29, freq=400000)
+    devices = i2c_bus.scan()
+    print([hex(devices[i]) for i in range(len(devices))])
+    # 2. Fire up the RTC module instance
+    rtc = RV3028(i2c_bus)
 
-# 1. Init your software I2C pipeline
-i2c_bus = machine.SoftI2C(sda=28, scl=29, freq=100000)
-print(i2c_bus.scan())
-# 2. Fire up the RTC module instance
-rtc = RV3028(i2c_bus)
+    # 3. UNCOMMENT TO SET THE CURRENT TIME ONCE, THEN RE-COMMENT AND RE-RUN:
+    # Parameters: (Year, Month, Date, Weekday [0-6], Hour, Minute, Second)
+    # rtc.set_time(2026, 7, 29, 3, 13, 45, 0)
+    # rtc.set_time(2026, 9, 20, 1, 15, 33, 10)
 
-# 3. UNCOMMENT TO SET THE CURRENT TIME ONCE, THEN RE-COMMENT AND RE-RUN:
-# Parameters: (Year, Month, Date, Weekday [0-6], Hour, Minute, Second)
-# rtc.set_time(2026, 7, 29, 3, 13, 45, 0)
-# rtc.set_time(2026, 9, 10, 4, 20, 32, 20)
-
-# 4. Continual clock readout
-while True:
-    t = rtc.read_time()
-    # Format out into an easy-to-read ISO timestamp string
-    print(f"Timestamp: {t['year']:04d}-{t['month']:02d}-{t['date']:02d} {t['hour']:02d}:{t['minute']:02d}:{t['second']:02d}")
-    time.sleep(1)
+    # 4. Continual clock readout
+    while True:
+        t = rtc.read_time()
+        # Format out into an easy-to-read ISO timestamp string
+        print(f"Timestamp: {t['year']:04d}-{t['month']:02d}-{t['date']:02d} {t['hour']:02d}:{t['minute']:02d}:{t['second']:02d}")
+        time.sleep(1)
