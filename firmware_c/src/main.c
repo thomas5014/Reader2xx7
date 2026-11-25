@@ -26,10 +26,7 @@
 //     of time on) is the whole point of this experiment.
 //
 // What's deliberately NOT here yet, to keep this first skeleton small:
-//   - SDIO / SD card (ports/rp2/sdio_rp2350) -- not linked in at all.
-//   - CYW43 / WiFi -- not linked in at all.
-//   - PSRAM -- the draw buffer below is a plain static array in regular
-//     SRAM, same as modlvport.c's g_draw_buf.
+//   - CYW43 / WiFi -- not linked in at all. --- scary shit
 // All three are addable later the same way nt35510_c/cst3240_c were: pull
 // the existing C code in, write whatever small amount of glue main() needs.
 
@@ -37,6 +34,7 @@
 
 #include "pico/stdlib.h"
 #include "hardware/pwm.h"
+#include "hardware/clocks.h"
 
 #include "lvgl/lvgl.h"
 #include "nt35510_c/nt35510.h"
@@ -47,6 +45,12 @@
 #include "LIS2DW12.h"
 #include "SDIO.h"
 #include "DRV2605L.h"
+#include "PSRAM.h"
+#include "ff.h"
+
+#define PSRAMSC_PIN 47
+
+static FATFS fs;
 
 #define BACKLIGHT_PIN 20
 #define SYSPWROFF_PIN 40
@@ -86,6 +90,7 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
     lv_display_flush_ready(disp);
 }
 
+// Sends kill interrupt to sys pwr switch
 static void sys_power_off(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
 
@@ -143,12 +148,14 @@ static void slider_event_cb(lv_event_t *e) {
     lv_label_set_text_fmt(label, "%d%%", (int)lv_slider_get_value(slider));
 }
 
+// Haptic label cb
 static void buzz_slide_cb(lv_event_t *e) {
     lv_obj_t *slider = lv_event_get_target(e);
     lv_obj_t *label = lv_event_get_user_data(e);
     lv_label_set_text_fmt(label, "%d", (int)lv_slider_get_value(slider));
 }
 
+// Haptic buzz cb
 static void buzz_btn_cb(lv_event_t *e) {
     lv_obj_t *slider = lv_event_get_user_data(e);
     drv2605l_raw((uint8_t)lv_slider_get_value(slider));
@@ -159,6 +166,7 @@ static uint8_t s_red, s_green, s_blue;
 static uint8_t sld_ids[3] = {0,1,2};
 static lv_obj_t *s_swatch;
 
+// Updates color swatch and ws2818 indicator led
 static void color_slider_event_cb(lv_event_t *e) {
     lv_obj_t *slider = lv_event_get_target(e);
     uint8_t *channel = lv_event_get_user_data(e);
@@ -175,12 +183,13 @@ static void color_slider_event_cb(lv_event_t *e) {
 }
 
 // Color sliders for ws2818 led
+// partitioned portion of demo screen
 static void color_sliders(lv_obj_t *scr) {
     // this is making me itch to use structs
     uint8_t red   = 0;
     uint8_t green = 0;
     uint8_t blue  = 0;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 3; i++) { // color sliders and their value labels
         uint16_t y = 420 + i * 40;
 
         lv_obj_t *slider = lv_slider_create(scr);
@@ -204,6 +213,7 @@ static void color_sliders(lv_obj_t *scr) {
     lv_obj_align(s_swatch, LV_ALIGN_TOP_MID, 0, 300);  // wherever fits near the sliders
 }
 
+// pulls time data from rtc chip, sets text at bottom of ui -- this is an updating cb
 static void clock_timer_cb(lv_timer_t * timer) {
     lv_obj_t *time_text = lv_timer_get_user_data(timer);
     rv3028_time_t t;
@@ -215,6 +225,7 @@ static void clock_timer_cb(lv_timer_t * timer) {
 
 static lis2dw12_data_t max_accs;
 
+// Updates accelerometer data text
 static void accel_timer_cb(lv_timer_t *timer) {
     lv_obj_t *accel_text = lv_timer_get_user_data(timer);
     lis2dw12_data_t data;
@@ -230,12 +241,14 @@ static void build_demo_screen(void) {
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x101418), 0);
 
+    // A name. ex: hi my name is, Floccinaucinihilipilification
     lv_obj_t *title = lv_label_create(scr);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xE8ECF0), 0);
     lv_label_set_text(title, "Reader2xx7 (bare metal)");
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
 
+    // Test button, tap and tap some more
     lv_obj_t *btn = lv_button_create(scr);
     lv_obj_set_size(btn, 260, 90);
     lv_obj_align(btn, LV_ALIGN_TOP_MID, 0, 80);
@@ -243,7 +256,8 @@ static void build_demo_screen(void) {
     lv_obj_set_style_text_font(btn_label, &lv_font_montserrat_24, 0);
     lv_label_set_text(btn_label, "Tap me");
     lv_obj_center(btn_label);
-
+    
+    // Displays current number of button taps - just the one button
     lv_obj_t *count = lv_label_create(scr);
     lv_obj_set_style_text_font(count, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(count, lv_color_hex(0xE8ECF0), 0);
@@ -251,11 +265,14 @@ static void build_demo_screen(void) {
     lv_obj_align(count, LV_ALIGN_TOP_MID, 0, 200);
     lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, count);
 
+    // Color indicator sliders - control the rainbow!
     color_sliders(scr);
 
+    // Test switch, no functionality
     lv_obj_t *sw = lv_switch_create(scr);
     lv_obj_align(sw, LV_ALIGN_TOP_MID, 0, 580);
-
+    
+    // Test list, no functionality
     lv_obj_t *lst = lv_list_create(scr);
     lv_obj_set_align(lst, LV_ALIGN_BOTTOM_MID);
     lv_obj_set_size(lst, 400, 150);
@@ -267,6 +284,7 @@ static void build_demo_screen(void) {
     lv_list_add_button(lst, LV_SYMBOL_BATTERY_1, "Battery");
     lv_list_add_button(lst, LV_SYMBOL_BLUETOOTH, "Bluetooth");
 
+    // test drop down, no functionality
     lv_obj_t *thing2 = lv_dropdown_create(scr);
     lv_obj_align(thing2,LV_ALIGN_TOP_LEFT, 10, 40);
     lv_obj_set_x(thing2, 20);
@@ -274,6 +292,7 @@ static void build_demo_screen(void) {
     lv_dropdown_set_dir(thing2, LV_DIR_RIGHT);
     lv_dropdown_add_option(thing2,"thing1\nthing2\nthing3\nthing4",0);
 
+    // It's a power button, click and you ded - wel temporaly
     lv_obj_t *powerbtn = lv_btn_create(scr);
     lv_obj_set_align(powerbtn, LV_ALIGN_TOP_RIGHT);
     lv_obj_set_size(powerbtn, 60, 60);
@@ -292,6 +311,7 @@ static void build_demo_screen(void) {
 
     lv_timer_t *timer = lv_timer_create(clock_timer_cb, 1000, time_text);
 
+    // accelerometer readouts
     lv_obj_t *accel_text = lv_label_create(scr);
     lv_obj_set_style_text_font(accel_text, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(accel_text, lv_color_hex(0xE8ECF0), 0);
@@ -300,6 +320,7 @@ static void build_demo_screen(void) {
 
     lv_timer_create(accel_timer_cb, 100, accel_text);  // e.g. 10Hz, faster than the 1Hz clock
 
+    // Haptic tone picker slider and label for tone number
     lv_obj_t *buzz_slide = lv_slider_create(scr);
     lv_slider_set_range(buzz_slide, 1, 123);
     lv_obj_set_width(buzz_slide, 340);
@@ -325,11 +346,35 @@ int main(void) {
     // the way re-running a script could in the MicroPython build.
     sleep_ms(1500);
     printf("rpr480 bare-metal: boot\n");
+    printf("start up system clock: %dmhz/n",clock_get_hz(clk_sys)/1000000);
 
+    // Start 16bit parallel communication with display panel
+    // DMA and PIO protocalls initialized for zero cpu overhead bit banging
+    // backlight only turned on later, this is in part to avoid showing gram noise
     nt35510_init();
     printf("nt35510_init done\n");
+
+    // External memory device - shares same bus as flash, select pin is 47
+    // Will later be used for large multi-page buff, current it is fine if it fails in an expected manor, there are still instances where it will just hang tho
+    printf("Bringing up PSRAM...\n"); // should the following be in a function?... yeah, prob
+    int psram_size = psram_bringup(PSRAMSC_PIN);
+    printf("psram_brignup done, size: %d\n",psram_size); // 8,388,608 8,388,608
+    sleep_ms(100);
+    if (psram_size != 0) {
+        volatile uint8_t *psram = (volatile uint8_t *)PSRAM_BASE;
+        psram[0] = 0x42;
+        printf("psram readback: 0x%02x\n",psram[0]);
+    } else {
+        printf("PSRAM not detected, skipping readback test\n");
+    }
+
+    // Touch panel, first device on I2C1 - sets clock to 400khz, on gpio30-31
+    // device adress: 0x5A, LVGL handlers pull state regularly to parse gestures, no additional parsers needed
     cst3240_init();
     printf("cst3240_init done\n");
+    
+    // individual addressable rgb indicator led, controlled over pio on gpio 44
+    // not core to system function
     if (ws2818_init()) {
         printf("ws2818_init done\nsetting color...\n");
         ws2818_set_color(255,0,0);
@@ -337,6 +382,10 @@ int main(void) {
     } else {
         printf("ws2818_init failed\n");
     }
+
+    // Accelerometer, I2C1 - same a touch panel, addr = 0x18
+    // returns x,y,z accelerations in type lis2dw12_data_t. 1g ~ 2^12
+    // Has temperature reading too. not part of lis2dw12_data_t yet
     lis2dw12_init();
     printf("lis2dw12_init done\n");
     sleep_ms(50);
@@ -345,15 +394,37 @@ int main(void) {
     max_accs = data;
     printf("x: %d, y: %d, z: %d \n", data.x, data.y, data.z);
 
+    // Test for both the pio sdio protocall and fatfs mounting of said sdio attached drive
+    // Presently very bare-bones: no physical card detection gpio 21, ..., and uhh other things too.
+    // With the connecting of the card, it will be mounted then opened to the base dir and the contents will be printed out -- man someone cant think of a more inteligent way of stating that
     if (sdio_sdcard_init()) {
         printf("SDIO: card ready, %lu sectors\n", (unsigned long)sdio_sdcard_sector_count());
+        
+        // Creating/Mounting file system
+        printf("Mounting sd card:\n");
+        FRESULT result = f_mount(&fs);
+        printf("Mount result: %d - %d\n",result,result==FR_OK);
+        FILINFO fno; FF_DIR dir;
+        printf("Opening dir\n");
+        f_opendir(&fs, &dir, "/");
+        printf("Printing dir contents:\n");
+        // printing all contents 
+        while (true) {
+            result = f_readdir(&dir, &fno);
+            if (result != FR_OK || fno.fname[0] == 0) break;
+            printf("  %s\n", fno.fname);
+        }
+        printf("Closing link to dir\n");
+        f_closedir(&dir);
     } else {
         printf("SDIO: init failed\n");
     }
 
+    // Haptic driver, I2C0 - gpio28-29, address is 0x5A(same as touch but this is a different bus so it's fine)
+    // idk what else to say, it's all just feels dude
     drv2605l_init();
     printf("drv2605l_init done\n");
-    // haptic_buzz();
+    // haptic_buzz(); // this is commented out right now because later the lvgl ui will have a section for testing this
 
 
     // First real test of the new driver, deliberately standalone: print
@@ -380,11 +451,16 @@ int main(void) {
         printf("RTC: read failed -- check I2C0 wiring (GPIO28 SDA/29 SCL) and address 0x52\n");
     }
 
+    // System current sensor - I2C0 gpio28-29, device address = 0x40
+    // placed between battery control chip and sys pwr switch. read voltage may be above true by ~0.1-0.2v
     ina226_init();
     printf("INA226: bus-v: %F, shunt-v: %F\n",ina226_bus_voltage(),ina226_shunt_voltage());
 
+    // PWM en to led driver for backlight, gpio20
+    // set to full brightness at the moment
     backlight_init();
 
+    // lvgl system -- it does things, idk
     lv_init();
     lv_tick_set_cb(tick_cb);
 

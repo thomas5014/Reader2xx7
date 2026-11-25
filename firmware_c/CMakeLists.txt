@@ -51,6 +51,15 @@ file(GLOB_RECURSE LVGL_SOURCES ${LVGL_DIR}/src/*.c)
 # etc.) that both sides need to agree on.
 add_compile_definitions(LV_CONF_PATH="${CMAKE_CURRENT_LIST_DIR}/lv_conf.h")
 
+# Same idea as LV_CONF_PATH above, for oofatfs: ff.h's own #include FFCONF_H
+# (not a literal "ffconf.h", a macro -- that's how the real MicroPython rp2
+# build points it at its ffconf.h too, see ports/rp2/CMakeLists.txt) needs
+# this defined for every translation unit that includes ff.h, or it bails
+# out at its own "Wrong configuration file" #error before defining any of
+# its real types/macros -- which is why that error cascades into a wall of
+# seemingly unrelated "FF_MAX_SS undeclared" etc. errors elsewhere.
+add_compile_definitions(FFCONF_H="${CMAKE_CURRENT_LIST_DIR}/src/fatfs/ffconf.h")
+
 add_library(lvgl STATIC ${LVGL_SOURCES})
 target_include_directories(lvgl PUBLIC
     # So `#include "lvgl/lvgl.h"` (used the same way modlvport.c used it)
@@ -80,11 +89,17 @@ add_executable(rpr480_bare
     src/LIS2DW12.c
     src/SDIO.c
     src/DRV2605L.c
+    src/PSRAM.c
+    src/fatfs/ff.c
+    src/fatfs/ffunicode.c
+    src/fatfs/diskio.c
     ${MPY_RP2_DIR}/nt35510_c/nt35510.c
     ${MPY_RP2_DIR}/cst3240_c/cst3240.c
     ${MPY_RP2_DIR}/sdio_rp2350/src/sdio_rp2350.cpp
 )
 target_include_directories(rpr480_bare PRIVATE
+    src
+    src/fatfs
     ${MPY_RP2_DIR}
     ${MPY_RP2_DIR}/sdio_rp2350/include
 )
@@ -96,6 +111,7 @@ target_link_libraries(rpr480_bare
     hardware_pio
     hardware_dma
     hardware_clocks
+    hardware_sync
     hardware_pwm
     lvgl
 )
